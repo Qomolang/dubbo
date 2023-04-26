@@ -39,7 +39,6 @@ import org.apache.dubbo.rpc.cluster.Router;
 import org.apache.dubbo.rpc.cluster.directory.StaticDirectory;
 import org.apache.dubbo.rpc.cluster.router.state.BitList;
 import org.apache.dubbo.rpc.cluster.support.ClusterUtils;
-import org.apache.dubbo.rpc.model.ApplicationModel;
 import org.apache.dubbo.rpc.model.ModuleModel;
 
 import java.util.ArrayList;
@@ -63,10 +62,8 @@ import static org.apache.dubbo.common.constants.CommonConstants.PROTOCOL_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.SIDE_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.TAG_KEY;
 import static org.apache.dubbo.common.constants.RegistryConstants.APP_DYNAMIC_CONFIGURATORS_CATEGORY;
-import static org.apache.dubbo.common.constants.RegistryConstants.CATEGORY_KEY;
 import static org.apache.dubbo.common.constants.RegistryConstants.COMPATIBLE_CONFIG_KEY;
 import static org.apache.dubbo.common.constants.RegistryConstants.CONFIGURATORS_CATEGORY;
-import static org.apache.dubbo.common.constants.RegistryConstants.CONSUMERS_CATEGORY;
 import static org.apache.dubbo.common.constants.RegistryConstants.DEFAULT_CATEGORY;
 import static org.apache.dubbo.common.constants.RegistryConstants.DEFAULT_HASHMAP_LOAD_FACTOR;
 import static org.apache.dubbo.common.constants.RegistryConstants.DYNAMIC_CONFIGURATORS_CATEGORY;
@@ -75,11 +72,9 @@ import static org.apache.dubbo.common.constants.RegistryConstants.PROVIDERS_CATE
 import static org.apache.dubbo.common.constants.RegistryConstants.ROUTERS_CATEGORY;
 import static org.apache.dubbo.common.constants.RegistryConstants.ROUTE_PROTOCOL;
 import static org.apache.dubbo.registry.Constants.CONFIGURATORS_SUFFIX;
-import static org.apache.dubbo.registry.integration.InterfaceCompatibleRegistryProtocol.DEFAULT_REGISTER_CONSUMER_KEYS;
-import static org.apache.dubbo.remoting.Constants.CHECK_KEY;
 import static org.apache.dubbo.rpc.Constants.MOCK_KEY;
 import static org.apache.dubbo.rpc.cluster.Constants.ROUTER_KEY;
-import static org.apache.dubbo.rpc.model.ScopeModelUtil.getApplicationModel;
+import static org.apache.dubbo.rpc.model.ScopeModelUtil.getModuleModel;
 
 
 /**
@@ -101,20 +96,21 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
      * The initial value is null and the midway may be assigned to null, please use the local variable reference
      */
     protected volatile Set<URL> cachedInvokerUrls;
-    private final ApplicationModel applicationModel;
+    private final ModuleModel moduleModel;
 
     public RegistryDirectory(Class<T> serviceType, URL url) {
         super(serviceType, url);
-        applicationModel = getApplicationModel(url.getScopeModel());
-        consumerConfigurationListener = getConsumerConfigurationListener(url.getOrDefaultModuleModel());
+        moduleModel = getModuleModel(url.getScopeModel());
+        consumerConfigurationListener = getConsumerConfigurationListener(moduleModel);
     }
 
     @Override
     public void subscribe(URL url) {
-        setSubscribeUrl(url);
-        consumerConfigurationListener.addNotifyListener(this);
-        referenceConfigurationListener = new ReferenceConfigurationListener(url.getOrDefaultModuleModel(), this, url);
-        registry.subscribe(url, this);
+        super.subscribe(url);
+        if (moduleModel.getModelEnvironment().getConfiguration().convert(Boolean.class, org.apache.dubbo.registry.Constants.ENABLE_CONFIGURATION_LISTEN, true)) {
+            consumerConfigurationListener.addNotifyListener(this);
+            referenceConfigurationListener = new ReferenceConfigurationListener(moduleModel, this, url);
+        }
     }
 
     private ConsumerConfigurationListener getConsumerConfigurationListener(ModuleModel moduleModel) {
@@ -124,10 +120,24 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
 
     @Override
     public void unSubscribe(URL url) {
-        setSubscribeUrl(null);
-        consumerConfigurationListener.removeNotifyListener(this);
-        referenceConfigurationListener.stop();
-        registry.unsubscribe(url, this);
+        super.unSubscribe(url);
+        if (moduleModel.getModelEnvironment().getConfiguration().convert(Boolean.class, org.apache.dubbo.registry.Constants.ENABLE_CONFIGURATION_LISTEN, true)) {
+            consumerConfigurationListener.removeNotifyListener(this);
+            if (referenceConfigurationListener != null) {
+                referenceConfigurationListener.stop();
+            }
+        }
+    }
+
+    @Override
+    public void destroy() {
+        super.destroy();
+        if (moduleModel.getModelEnvironment().getConfiguration().convert(Boolean.class, org.apache.dubbo.registry.Constants.ENABLE_CONFIGURATION_LISTEN, true)) {
+            consumerConfigurationListener.removeNotifyListener(this);
+            if (referenceConfigurationListener != null) {
+                referenceConfigurationListener.stop();
+            }
+        }
     }
 
     @Override
@@ -137,10 +147,10 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
         }
 
         Map<String, List<URL>> categoryUrls = urls.stream()
-                .filter(Objects::nonNull)
-                .filter(this::isValidCategory)
-                .filter(this::isNotCompatibleFor26x)
-                .collect(Collectors.groupingBy(this::judgeCategory));
+            .filter(Objects::nonNull)
+            .filter(this::isValidCategory)
+            .filter(this::isNotCompatibleFor26x)
+            .collect(Collectors.groupingBy(this::judgeCategory));
 
         List<URL> configuratorURLs = categoryUrls.getOrDefault(CONFIGURATORS_CATEGORY, Collections.emptyList());
         this.configurators = Configurator.toConfigurators(configuratorURLs).orElse(this.configurators);
@@ -156,7 +166,7 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
         List<AddressListener> supportedListeners = addressListenerExtensionLoader.getActivateExtension(getUrl(), (String[]) null);
         if (supportedListeners != null && !supportedListeners.isEmpty()) {
             for (AddressListener addressListener : supportedListeners) {
-                providerURLs = addressListener.notify(providerURLs, getConsumerUrl(),this);
+                providerURLs = addressListener.notify(providerURLs, getConsumerUrl(), this);
             }
         }
         refreshOverrideAndInvoker(providerURLs);
@@ -200,14 +210,14 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
         Assert.notNull(invokerUrls, "invokerUrls should not be null");
 
         if (invokerUrls.size() == 1
-                && invokerUrls.get(0) != null
-                && EMPTY_PROTOCOL.equals(invokerUrls.get(0).getProtocol())) {
+            && invokerUrls.get(0) != null
+            && EMPTY_PROTOCOL.equals(invokerUrls.get(0).getProtocol())) {
             this.forbidden = true; // Forbid to access
             routerChain.setInvokers(BitList.emptyList());
             destroyAllInvokers(); // Close all invokers
         } else {
             this.forbidden = false; // Allow to access
-            
+
             if (invokerUrls == Collections.<URL>emptyList()) {
                 invokerUrls = new ArrayList<>();
             }
@@ -246,7 +256,7 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
              */
             if (CollectionUtils.isEmptyMap(newUrlInvokerMap)) {
                 logger.error(new IllegalStateException("urls to invokers error .invokerUrls.size :" + invokerUrls.size() + ", invoker.size :0. urls :" + invokerUrls
-                        .toString()));
+                    .toString()));
                 return;
             }
 
@@ -356,8 +366,8 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
             }
             if (!getUrl().getOrDefaultFrameworkModel().getExtensionLoader(Protocol.class).hasExtension(providerUrl.getProtocol())) {
                 logger.error(new IllegalStateException("Unsupported protocol " + providerUrl.getProtocol() +
-                        " in notified url: " + providerUrl + " from registry " + getUrl().getAddress() +
-                        " to consumer " + NetUtils.getLocalHost() + ", supported protocol: " +
+                    " in notified url: " + providerUrl + " from registry " + getUrl().getAddress() +
+                    " to consumer " + NetUtils.getLocalHost() + ", supported protocol: " +
                     getUrl().getOrDefaultFrameworkModel().getExtensionLoader(Protocol.class).getSupportedExtensions()));
                 continue;
             }
@@ -399,7 +409,7 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
         if (providerUrl instanceof ServiceAddressURL) {
             providerUrl = overrideWithConfigurator(providerUrl);
         } else {
-            providerUrl = applicationModel.getBeanFactory().getBean(ClusterUtils.class).mergeUrl(providerUrl, queryMap); // Merge the consumer side parameters
+            providerUrl = moduleModel.getApplicationModel().getBeanFactory().getBean(ClusterUtils.class).mergeUrl(providerUrl, queryMap); // Merge the consumer side parameters
             providerUrl = overrideWithConfigurator(providerUrl);
             providerUrl = providerUrl.addParameter(Constants.CHECK_KEY, String.valueOf(false)); // Do not check whether the connection is successful or not, always create Invoker!
         }
@@ -410,7 +420,7 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
         }
 
         if ((providerUrl.getPath() == null || providerUrl.getPath()
-                .length() == 0) && DUBBO_PROTOCOL.equals(providerUrl.getProtocol())) { // Compatible version 1.0
+            .length() == 0) && DUBBO_PROTOCOL.equals(providerUrl.getProtocol())) { // Compatible version 1.0
             //fix by tony.chenl DUBBO-44
             String path = directoryUrl.getServiceInterface();
             if (path != null) {
@@ -452,18 +462,18 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
                     String appName = interfaceAddressURL.getApplication();
                     String side = interfaceAddressURL.getSide();
                     overriddenURL = URLBuilder.from(interfaceAddressURL)
-                            .clearParameters()
-                            .addParameter(APPLICATION_KEY, appName)
-                            .addParameter(SIDE_KEY, side).build();
+                        .clearParameters()
+                        .addParameter(APPLICATION_KEY, appName)
+                        .addParameter(SIDE_KEY, side).build();
                 }
                 for (Configurator configurator : configurators) {
                     overriddenURL = configurator.configure(overriddenURL);
                 }
                 url = new DubboServiceAddressURL(
-                        interfaceAddressURL.getUrlAddress(),
-                        interfaceAddressURL.getUrlParam(),
-                        interfaceAddressURL.getConsumerURL(),
-                        (ServiceConfigURL) overriddenURL);
+                    interfaceAddressURL.getUrlAddress(),
+                    interfaceAddressURL.getUrlParam(),
+                    interfaceAddressURL.getConsumerURL(),
+                    (ServiceConfigURL) overriddenURL);
             } else {
                 for (Configurator configurator : configurators) {
                     url = configurator.configure(url);
@@ -522,37 +532,6 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
         logger.info("New url total size, " + newUrlInvokerMap.size() + ", destroyed total size " + oldUrlInvokerMap.size());
     }
 
-    @Override
-    public Class<T> getInterface() {
-        return serviceType;
-    }
-
-    @Override
-    public List<Invoker<T>> getAllInvokers() {
-        return this.getInvokers();
-    }
-
-    @Override
-    public URL getConsumerUrl() {
-        return this.consumerUrl;
-    }
-
-    @Override
-    public URL getRegisteredConsumerUrl() {
-        return registeredConsumerUrl;
-    }
-
-    @Override
-    public void setRegisteredConsumerUrl(URL url) {
-        if (!shouldSimplified) {
-            this.registeredConsumerUrl = url.addParameters(CATEGORY_KEY, CONSUMERS_CATEGORY, CHECK_KEY,
-                    String.valueOf(false));
-        } else {
-            this.registeredConsumerUrl = URL.valueOf(url, DEFAULT_REGISTER_CONSUMER_KEYS, null).addParameters(
-                    CATEGORY_KEY, CONSUMERS_CATEGORY, CHECK_KEY, String.valueOf(false));
-        }
-    }
-
     /**
      * Haomin: added for test purpose
      */
@@ -563,13 +542,13 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
     private boolean isValidCategory(URL url) {
         String category = url.getCategory(DEFAULT_CATEGORY);
         if ((ROUTERS_CATEGORY.equals(category) || ROUTE_PROTOCOL.equals(url.getProtocol())) ||
-                PROVIDERS_CATEGORY.equals(category) ||
-                CONFIGURATORS_CATEGORY.equals(category) || DYNAMIC_CONFIGURATORS_CATEGORY.equals(category) ||
-                APP_DYNAMIC_CONFIGURATORS_CATEGORY.equals(category)) {
+            PROVIDERS_CATEGORY.equals(category) ||
+            CONFIGURATORS_CATEGORY.equals(category) || DYNAMIC_CONFIGURATORS_CATEGORY.equals(category) ||
+            APP_DYNAMIC_CONFIGURATORS_CATEGORY.equals(category)) {
             return true;
         }
         logger.warn("Unsupported category " + category + " in notified url: " + url + " from registry " +
-                getUrl().getAddress() + " to consumer " + NetUtils.getLocalHost());
+            getUrl().getAddress() + " to consumer " + NetUtils.getLocalHost());
         return false;
     }
 

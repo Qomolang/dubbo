@@ -17,12 +17,12 @@
 
 package org.apache.dubbo.common.constants;
 
-import org.apache.dubbo.common.URL;
-
 import java.net.NetworkInterface;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.regex.Pattern;
+
+import org.apache.dubbo.common.URL;
 
 public interface CommonConstants {
     String DUBBO = "dubbo";
@@ -60,6 +60,8 @@ public interface CommonConstants {
     String DEFAULT_DUBBO_PROPERTIES = "dubbo.properties";
 
     String DUBBO_MIGRATION_KEY = "dubbo.migration.file";
+
+    String DUBBO_MIGRATION_FILE_ENABLE = "dubbo.migration-file.enable";
 
     String DEFAULT_DUBBO_MIGRATION_FILE = "dubbo-migration.yaml";
 
@@ -109,6 +111,8 @@ public interface CommonConstants {
     int DEFAULT_THREADS = 200;
 
     String EXECUTOR_SERVICE_COMPONENT_KEY = ExecutorService.class.getName();
+
+    String INTERNAL_EXECUTOR_SERVICE_COMPONENT_KEY = "INTERNAL_SERVICE_EXECUTOR";
 
     String THREADPOOL_KEY = "threadpool";
 
@@ -216,6 +220,10 @@ public interface CommonConstants {
     String REVISION_KEY = "revision";
 
     String METADATA_KEY = "metadata-type";
+
+    String REPORT_METADATA_KEY = "report-metadata";
+
+    String REPORT_DEFINITION_KEY = "report-definition";
 
     String DEFAULT_METADATA_STORAGE_TYPE = "local";
 
@@ -374,8 +382,6 @@ public interface CommonConstants {
 
     int DEFAULT_FAILBACK_TIMES = 3;
 
-    String REGISTER_KEY = "register";
-
     String INTERFACES = "interfaces";
 
     String SSL_ENABLED_KEY = "ssl-enabled";
@@ -405,6 +411,8 @@ public interface CommonConstants {
     String CLASS_DESERIALIZE_ALLOWED_LIST = "dubbo.security.serialize.allowedClassList";
 
     String CLASS_DESERIALIZE_BLOCKED_LIST = "dubbo.security.serialize.blockedClassList";
+
+    String CLASS_DESERIALIZE_CHECK_SERIALIZABLE = "dubbo.application.check-serializable";
 
     String ENABLE_NATIVE_JAVA_GENERIC_SERIALIZE = "dubbo.security.serialize.generic.native-java-enable";
 
@@ -516,6 +524,8 @@ public interface CommonConstants {
 
     String PROVIDER_ASYNC_KEY = "PROVIDER_ASYNC";
 
+    String REGISTER_IP_KEY = "register.ip";
+
     String CURRENT_CLUSTER_INVOKER_KEY = "currentClusterInvoker";
 
     String ENABLE_ROUTER_SNAPSHOT_PRINT_KEY = "ENABLE_ROUTER_SNAPSHOT_PRINT";
@@ -527,4 +537,15 @@ public interface CommonConstants {
     String SET_FUTURE_IN_SYNC_MODE = "future.sync.set";
 
     String CLEAR_FUTURE_AFTER_GET = "future.clear.once";
+
+    String NATIVE_STUB = "nativestub";
+
+    String METADATA = "metadata";
+
+    String IGNORE_LISTEN_SHUTDOWN_HOOK = "dubbo.shutdownHook.listenIgnore";
+
+    String OPTIMIZER_KEY = "optimizer";
+
+    String PREFER_JSON_FRAMEWORK_NAME = "dubbo.json-framework.prefer";
+
 }

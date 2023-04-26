@@ -20,6 +20,8 @@ import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.config.configcenter.ConfigItem;
 import org.apache.dubbo.common.logger.Logger;
 import org.apache.dubbo.common.logger.LoggerFactory;
+import org.apache.dubbo.common.utils.NamedThreadFactory;
+import org.apache.dubbo.common.utils.StringUtils;
 import org.apache.dubbo.remoting.zookeeper.AbstractZookeeperClient;
 import org.apache.dubbo.remoting.zookeeper.ChildListener;
 import org.apache.dubbo.remoting.zookeeper.DataListener;
@@ -28,6 +30,7 @@ import org.apache.dubbo.remoting.zookeeper.StateListener;
 
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.curator.framework.api.ACLProvider;
 import org.apache.curator.framework.api.CuratorWatcher;
 import org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.curator.framework.recipes.cache.NodeCache;
@@ -40,6 +43,8 @@ import org.apache.zookeeper.KeeperException.NoNodeException;
 import org.apache.zookeeper.KeeperException.NodeExistsException;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.data.Stat;
 
 import java.nio.charset.Charset;
@@ -48,6 +53,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.dubbo.common.constants.CommonConstants.SESSION_KEY;
@@ -60,7 +67,7 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
 
     private static final Charset CHARSET = StandardCharsets.UTF_8;
     private final CuratorFramework client;
-    private static Map<String, NodeCache> nodeCacheMap = new ConcurrentHashMap<>();
+    private static final Map<String, NodeCache> nodeCacheMap = new ConcurrentHashMap<>();
 
     public CuratorZookeeperClient(URL url) {
         super(url);
@@ -73,8 +80,19 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
                     .connectionTimeoutMs(timeout)
                     .sessionTimeoutMs(sessionExpireMs);
             String userInformation = url.getUserInformation();
-            if (userInformation != null && userInformation.length() > 0) {
+            if (StringUtils.isNotEmpty(userInformation)) {
                 builder = builder.authorization("digest", userInformation.getBytes());
+                builder.aclProvider(new ACLProvider() {
+                    @Override
+                    public List<ACL> getDefaultAcl() {
+                        return ZooDefs.Ids.CREATOR_ALL_ACL;
+                    }
+
+                    @Override
+                    public List<ACL> getAclForPath(String path) {
+                        return ZooDefs.Ids.CREATOR_ALL_ACL;
+                    }
+                });
             }
             client = builder.build();
             client.getConnectionStateListenable().addListener(new CuratorConnectionStateListener(url));
@@ -83,6 +101,7 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
             if (!connected) {
                 throw new IllegalStateException("zookeeper not connected");
             }
+            CuratorWatcherImpl.closed = false;
         } catch (Exception e) {
             close();
             throw new IllegalStateException(e.getMessage(), e);
@@ -255,6 +274,13 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
     public void doClose() {
         super.close();
         client.close();
+        CuratorWatcherImpl.closed = true;
+        synchronized (CuratorWatcherImpl.class) {
+            if (CuratorWatcherImpl.CURATOR_WATCHER_EXECUTOR_SERVICE != null) {
+                CuratorWatcherImpl.CURATOR_WATCHER_EXECUTOR_SERVICE.shutdown();
+                CuratorWatcherImpl.CURATOR_WATCHER_EXECUTOR_SERVICE = null;
+            }
+        }
     }
 
     @Override
@@ -275,7 +301,7 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
 
     @Override
     protected CuratorZookeeperClient.NodeCacheListenerImpl createTargetDataListener(String path, DataListener listener) {
-        return new NodeCacheListenerImpl(client, listener, path);
+        return new NodeCacheListenerImpl(listener, path);
     }
 
     @Override
@@ -318,8 +344,6 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
 
     static class NodeCacheListenerImpl implements NodeCacheListener {
 
-        private CuratorFramework client;
-
         private volatile DataListener dataListener;
 
         private String path;
@@ -327,8 +351,7 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
         protected NodeCacheListenerImpl() {
         }
 
-        public NodeCacheListenerImpl(CuratorFramework client, DataListener dataListener, String path) {
-            this.client = client;
+        public NodeCacheListenerImpl(DataListener dataListener, String path) {
             this.dataListener = dataListener;
             this.path = path;
         }
@@ -353,9 +376,23 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
 
     static class CuratorWatcherImpl implements CuratorWatcher {
 
+        private static volatile ExecutorService CURATOR_WATCHER_EXECUTOR_SERVICE;
+
+        private static volatile boolean closed = false;
+
         private CuratorFramework client;
         private volatile ChildListener childListener;
         private String path;
+
+        private static void initExecutorIfNecessary() {
+            if (!closed && CURATOR_WATCHER_EXECUTOR_SERVICE == null) {
+                synchronized (CuratorWatcherImpl.class) {
+                    if (!closed && CURATOR_WATCHER_EXECUTOR_SERVICE == null) {
+                        CURATOR_WATCHER_EXECUTOR_SERVICE = Executors.newSingleThreadExecutor(new NamedThreadFactory("Dubbo-CuratorWatcher"));
+                    }
+                }
+            }
+        }
 
         public CuratorWatcherImpl(CuratorFramework client, ChildListener listener, String path) {
             this.client = client;
@@ -379,14 +416,23 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
             }
 
             if (childListener != null) {
-                childListener.childChanged(path, client.getChildren().usingWatcher(this).forPath(path));
+                Runnable task = () -> {
+                    try {
+                        childListener.childChanged(path, client.getChildren().usingWatcher(CuratorWatcherImpl.this).forPath(path));
+                    } catch (Exception e) {
+                        logger.warn("client get children error", e);
+                    }
+                };
+                initExecutorIfNecessary();
+                if (!closed && CURATOR_WATCHER_EXECUTOR_SERVICE != null) {
+                    CURATOR_WATCHER_EXECUTOR_SERVICE.execute(task);
+                }
             }
         }
     }
 
     private class CuratorConnectionStateListener implements ConnectionStateListener {
         private final long UNKNOWN_SESSION_ID = -1L;
-
         private long lastSessionId;
         private int timeout;
         private int sessionExpireMs;
@@ -429,7 +475,6 @@ public class CuratorZookeeperClient extends AbstractZookeeperClient<CuratorZooke
                 }
             }
         }
-
     }
 
     /**

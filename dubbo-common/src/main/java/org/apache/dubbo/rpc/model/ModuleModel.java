@@ -16,6 +16,7 @@
  */
 package org.apache.dubbo.rpc.model;
 
+import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.config.ModuleEnvironment;
 import org.apache.dubbo.common.context.ModuleExt;
 import org.apache.dubbo.common.deploy.ApplicationDeployer;
@@ -26,8 +27,10 @@ import org.apache.dubbo.common.extension.ExtensionScope;
 import org.apache.dubbo.common.logger.Logger;
 import org.apache.dubbo.common.logger.LoggerFactory;
 import org.apache.dubbo.common.utils.Assert;
+import org.apache.dubbo.common.utils.ClassUtils;
 import org.apache.dubbo.config.context.ModuleConfigManager;
 
+import java.util.HashMap;
 import java.util.Set;
 
 /**
@@ -49,7 +52,7 @@ public class ModuleModel extends ScopeModel {
     }
 
     public ModuleModel(ApplicationModel applicationModel, boolean isInternal) {
-        super(applicationModel, ExtensionScope.MODULE);
+        super(applicationModel, ExtensionScope.MODULE, isInternal);
         Assert.notNull(applicationModel, "ApplicationModel can not be null");
         this.applicationModel = applicationModel;
         applicationModel.addModule(this, isInternal);
@@ -58,24 +61,21 @@ public class ModuleModel extends ScopeModel {
         }
 
         initialize();
-        Assert.notNull(serviceRepository, "ModuleServiceRepository can not be null");
-        Assert.notNull(moduleConfigManager, "ModuleConfigManager can not be null");
-        Assert.assertTrue(moduleConfigManager.isInitialized(), "ModuleConfigManager can not be initialized");
+        Assert.notNull(getServiceRepository(), "ModuleServiceRepository can not be null");
+        Assert.notNull(getConfigManager(), "ModuleConfigManager can not be null");
+        Assert.assertTrue(getConfigManager().isInitialized(), "ModuleConfigManager can not be initialized");
 
         // notify application check state
         ApplicationDeployer applicationDeployer = applicationModel.getDeployer();
         if (applicationDeployer != null) {
             applicationDeployer.notifyModuleChanged(this, DeployState.PENDING);
         }
-        this.internalModule = isInternal;
     }
 
     @Override
     protected void initialize() {
         super.initialize();
         this.serviceRepository = new ModuleServiceRepository(this);
-        this.moduleConfigManager = new ModuleConfigManager(this);
-        this.moduleConfigManager.initialize();
 
         initModuleExt();
 
@@ -121,6 +121,11 @@ public class ModuleModel extends ScopeModel {
             moduleEnvironment = null;
         }
 
+        if (moduleConfigManager != null) {
+            moduleConfigManager.destroy();
+            moduleConfigManager = null;
+        }
+
         // destroy application if none pub module
         applicationModel.tryDestroy();
     }
@@ -151,6 +156,10 @@ public class ModuleModel extends ScopeModel {
     }
 
     public ModuleConfigManager getConfigManager() {
+        if (moduleConfigManager == null) {
+            moduleConfigManager = (ModuleConfigManager) this.getExtensionLoader(ModuleExt.class)
+                .getExtension(ModuleConfigManager.NAME);
+        }
         return moduleConfigManager;
     }
 
@@ -168,5 +177,23 @@ public class ModuleModel extends ScopeModel {
     @Deprecated
     public void setModuleEnvironment(ModuleEnvironment moduleEnvironment) {
         this.moduleEnvironment = moduleEnvironment;
+    }
+
+    public ConsumerModel registerInternalConsumer(Class<?> internalService, URL url) {
+        ServiceMetadata serviceMetadata = new ServiceMetadata();
+        serviceMetadata.setVersion(url.getVersion());
+        serviceMetadata.setGroup(url.getGroup());
+        serviceMetadata.setDefaultGroup(url.getGroup());
+        serviceMetadata.setServiceInterfaceName(internalService.getName());
+        serviceMetadata.setServiceType(internalService);
+        String serviceKey = URL.buildKey(internalService.getName(), url.getGroup(), url.getVersion());
+        serviceMetadata.setServiceKey(serviceKey);
+
+        ConsumerModel consumerModel = new ConsumerModel(serviceMetadata.getServiceKey(), "jdk", serviceRepository.lookupService(serviceMetadata.getServiceInterfaceName()),
+            this, serviceMetadata, new HashMap<>(0), ClassUtils.getClassLoader(internalService));
+
+        logger.info("Dynamically registering consumer model " + serviceKey + " into model " + this.getDesc());
+        serviceRepository.registerConsumer(consumerModel);
+        return consumerModel;
     }
 }

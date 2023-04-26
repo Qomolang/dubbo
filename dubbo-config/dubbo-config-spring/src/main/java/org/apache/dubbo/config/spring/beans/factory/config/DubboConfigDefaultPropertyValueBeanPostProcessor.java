@@ -84,14 +84,14 @@ public class DubboConfigDefaultPropertyValueBeanPostProcessor extends GenericBea
 
             Object propertyValue = invokeMethod(getterMethod, bean);
 
-            if (propertyValue != null) { // If The return value of "getName" method is not null
+            if (propertyValue != null) { // If The return value of "getId" method is not null
                 return;
             }
 
             Method setterMethod = propertyDescriptor.getWriteMethod();
             if (setterMethod != null) { // the getter and setter methods are present
                 if (Arrays.equals(of(String.class), setterMethod.getParameterTypes())) { // the param type is String
-                    // set bean name to the value of the the property
+                    // set bean name to the value of the property
                     invokeMethod(setterMethod, bean, beanName);
                 }
             }

@@ -81,7 +81,7 @@ public class NettyServer extends AbstractServer {
     private final int serverShutdownTimeoutMills;
 
     public NettyServer(URL url, ChannelHandler handler) throws RemotingException {
-        // you can customize name and type of client thread pool by THREAD_NAME_KEY and THREADPOOL_KEY in CommonConstants.
+        // you can customize name and type of client thread pool by THREAD_NAME_KEY and THREAD_POOL_KEY in CommonConstants.
         // the handler will be wrapped: MultiMessageHandler->HeartbeatHandler->handler
         super(ExecutorUtil.setThreadName(url, SERVER_THREAD_POOL_NAME), ChannelHandlers.wrap(handler, url));
 
@@ -98,14 +98,36 @@ public class NettyServer extends AbstractServer {
     protected void doOpen() throws Throwable {
         bootstrap = new ServerBootstrap();
 
-        bossGroup = NettyEventLoopFactory.eventLoopGroup(1, EVENT_LOOP_BOSS_POOL_NAME);
-        workerGroup = NettyEventLoopFactory.eventLoopGroup(
-                getUrl().getPositiveParameter(IO_THREADS_KEY, Constants.DEFAULT_IO_THREADS),
-            EVENT_LOOP_WORKER_POOL_NAME);
+        bossGroup = createBossGroup();
+        workerGroup = createWorkerGroup();
 
-        final NettyServerHandler nettyServerHandler = new NettyServerHandler(getUrl(), this);
+        final NettyServerHandler nettyServerHandler = createNettyServerHandler();
         channels = nettyServerHandler.getChannels();
 
+        initServerBootstrap(nettyServerHandler);
+
+        // bind
+        ChannelFuture channelFuture = bootstrap.bind(getBindAddress());
+        channelFuture.syncUninterruptibly();
+        channel = channelFuture.channel();
+
+    }
+
+    protected EventLoopGroup createBossGroup() {
+        return NettyEventLoopFactory.eventLoopGroup(1, EVENT_LOOP_BOSS_POOL_NAME);
+    }
+
+    protected EventLoopGroup createWorkerGroup() {
+        return NettyEventLoopFactory.eventLoopGroup(
+                getUrl().getPositiveParameter(IO_THREADS_KEY, Constants.DEFAULT_IO_THREADS),
+            EVENT_LOOP_WORKER_POOL_NAME);
+    }
+
+    protected NettyServerHandler createNettyServerHandler() {
+        return new NettyServerHandler(getUrl(), this);
+    }
+
+    protected void initServerBootstrap(NettyServerHandler nettyServerHandler) {
         boolean keepalive = getUrl().getParameter(KEEP_ALIVE_KEY, Boolean.FALSE);
 
         bootstrap.group(bossGroup, workerGroup)
@@ -130,11 +152,6 @@ public class NettyServer extends AbstractServer {
                                 .addLast("handler", nettyServerHandler);
                     }
                 });
-        // bind
-        ChannelFuture channelFuture = bootstrap.bind(getBindAddress());
-        channelFuture.syncUninterruptibly();
-        channel = channelFuture.channel();
-
     }
 
     @Override
@@ -205,4 +222,23 @@ public class NettyServer extends AbstractServer {
         return channel.isActive();
     }
 
+    protected EventLoopGroup getBossGroup() {
+        return bossGroup;
+    }
+
+    protected EventLoopGroup getWorkerGroup() {
+        return workerGroup;
+    }
+
+    protected ServerBootstrap getServerBootstrap() {
+        return bootstrap;
+    }
+
+    protected io.netty.channel.Channel getBossChannel() {
+        return channel;
+    }
+
+    protected Map<String, Channel> getServerChannels() {
+        return channels;
+    }
 }

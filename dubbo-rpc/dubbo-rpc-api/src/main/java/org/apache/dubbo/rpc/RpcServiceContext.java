@@ -30,8 +30,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 
 import static org.apache.dubbo.common.constants.CommonConstants.CONSUMER_SIDE;
-import static org.apache.dubbo.common.constants.CommonConstants.DUBBO;
-import static org.apache.dubbo.common.constants.CommonConstants.PROTOCOL_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.PROVIDER_SIDE;
 import static org.apache.dubbo.rpc.Constants.ASYNC_KEY;
 import static org.apache.dubbo.rpc.Constants.RETURN_KEY;
@@ -580,7 +578,7 @@ public class RpcServiceContext extends RpcContext {
         if (consumerUrl == null) {
             return null;
         }
-        return consumerUrl.getParameter(PROTOCOL_KEY, DUBBO);
+        return consumerUrl.getProtocol();
     }
 
     @Override
@@ -609,11 +607,6 @@ public class RpcServiceContext extends RpcContext {
         this.consumerUrl = consumerUrl;
     }
 
-    public static void setRpcContext(URL url) {
-        RpcServiceContext rpcContext = RpcContext.getServiceContext();
-        rpcContext.setConsumerUrl(url);
-    }
-
     public boolean isNeedPrintRouterSnapshot() {
         return needPrintRouterSnapshot;
     }
@@ -632,10 +625,21 @@ public class RpcServiceContext extends RpcContext {
     public RpcServiceContext copyOf(boolean needCopy) {
         if (needCopy) {
             RpcServiceContext copy = new RpcServiceContext();
+            copy.arguments = this.arguments;
             copy.consumerUrl = this.consumerUrl;
-            copy.localAddress = this.localAddress;
-            copy.remoteAddress = this.remoteAddress;
             copy.invocation = this.invocation;
+            copy.invokers = this.invokers;
+            copy.invoker = this.invoker;
+            copy.localAddress = this.localAddress;
+            copy.methodName = this.methodName;
+            copy.needPrintRouterSnapshot = this.needPrintRouterSnapshot;
+            copy.parameterTypes = this.parameterTypes;
+            copy.remoteAddress = this.remoteAddress;
+            copy.remoteApplicationName = this.remoteApplicationName;
+            copy.request = this.request;
+            copy.response = this.response;
+            copy.url = this.url;
+            copy.urls = this.urls;
             return copy;
         } else {
             return this;

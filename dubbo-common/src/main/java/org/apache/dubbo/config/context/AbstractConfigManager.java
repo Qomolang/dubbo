@@ -223,6 +223,13 @@ public abstract class AbstractConfigManager extends LifecycleAdapter {
         return config;
     }
 
+    protected <C extends AbstractConfig> boolean removeIfAbsent(C config, Map<String, C> configsMap) {
+        if(config.getId() != null) {
+            return configsMap.remove(config.getId(), config);
+        }
+        return configsMap.values().removeIf(c -> config == c);
+    }
+
     protected boolean isUniqueConfig(AbstractConfig config) {
         if (uniqueConfigTypes.contains(config.getClass())) {
             return true;
@@ -266,11 +273,7 @@ public abstract class AbstractConfigManager extends LifecycleAdapter {
         }
 
         // check unique config
-        Optional<C> oldOne = checkUniqueConfig(configsMap, config);
-        if (oldOne != null) {
-            return oldOne;
-        }
-        return Optional.empty();
+        return checkUniqueConfig(configsMap, config);
     }
 
     public <C extends AbstractConfig> Map<String, C> getConfigsMap(Class<C> cls) {
@@ -448,9 +451,25 @@ public abstract class AbstractConfigManager extends LifecycleAdapter {
                     }
                     break;
                 }
+                case OVERRIDE_ALL: {
+                    // override old one's properties with the new one
+                    oldOne.overrideWithConfig(config, true);
+                    if (logger.isWarnEnabled() && duplicatedConfigs.add(config)) {
+                        logger.warn(msgPrefix + "override previous config with later config");
+                    }
+                    return Optional.of(oldOne);
+                }
+                case OVERRIDE_IF_ABSENT: {
+                    // override old one's properties with the new one
+                    oldOne.overrideWithConfig(config, false);
+                    if (logger.isWarnEnabled() && duplicatedConfigs.add(config)) {
+                        logger.warn(msgPrefix + "override previous config with later config");
+                    }
+                    return Optional.of(oldOne);
+                }
             }
         }
-        return null;
+        return Optional.empty();
     }
 
     public abstract void loadConfigs();
@@ -627,7 +646,7 @@ public abstract class AbstractConfigManager extends LifecycleAdapter {
 
 
     /**
-     * In some scenario,  we may nee to add and remove ServiceConfig or ReferenceConfig dynamically.
+     * In some scenario,  we may need to add and remove ServiceConfig or ReferenceConfig dynamically.
      *
      * @param config the config instance to remove.
      * @return
@@ -639,7 +658,10 @@ public abstract class AbstractConfigManager extends LifecycleAdapter {
 
         Map<String, AbstractConfig> configs = configsCache.get(getTagName(config.getClass()));
         if (CollectionUtils.isNotEmptyMap(configs)) {
-            return configs.values().removeIf(c -> config == c);
+            // lock by config type
+            synchronized (configs) {
+                return removeIfAbsent(config, configs);
+            }
         }
         return false;
     }

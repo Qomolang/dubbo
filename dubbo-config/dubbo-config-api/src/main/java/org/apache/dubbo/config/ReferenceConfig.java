@@ -18,6 +18,7 @@ package org.apache.dubbo.config;
 
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.Version;
+import org.apache.dubbo.common.constants.CommonConstants;
 import org.apache.dubbo.common.constants.RegistryConstants;
 import org.apache.dubbo.common.extension.ExtensionLoader;
 import org.apache.dubbo.common.logger.Logger;
@@ -49,6 +50,7 @@ import org.apache.dubbo.rpc.model.ScopeModel;
 import org.apache.dubbo.rpc.model.ServiceDescriptor;
 import org.apache.dubbo.rpc.protocol.injvm.InjvmProtocol;
 import org.apache.dubbo.rpc.service.GenericService;
+import org.apache.dubbo.rpc.stub.StubSuppliers;
 import org.apache.dubbo.rpc.support.ProtocolUtils;
 
 import java.util.ArrayList;
@@ -66,11 +68,9 @@ import static org.apache.dubbo.common.constants.CommonConstants.COMMA_SEPARATOR_
 import static org.apache.dubbo.common.constants.CommonConstants.CONSUMER_SIDE;
 import static org.apache.dubbo.common.constants.CommonConstants.INTERFACE_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.LOCALHOST_VALUE;
-import static org.apache.dubbo.common.constants.CommonConstants.METADATA_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.METHODS_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.MONITOR_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.PROXY_CLASS_REF;
-import static org.apache.dubbo.common.constants.CommonConstants.REMOTE_METADATA_STORAGE_TYPE;
 import static org.apache.dubbo.common.constants.CommonConstants.REVISION_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.SEMICOLON_SPLIT_PATTERN;
 import static org.apache.dubbo.common.constants.CommonConstants.SIDE_KEY;
@@ -80,6 +80,7 @@ import static org.apache.dubbo.common.utils.StringUtils.splitToSet;
 import static org.apache.dubbo.config.Constants.DUBBO_IP_TO_REGISTRY;
 import static org.apache.dubbo.registry.Constants.CONSUMER_PROTOCOL;
 import static org.apache.dubbo.registry.Constants.REGISTER_IP_KEY;
+import static org.apache.dubbo.rpc.Constants.GENERIC_KEY;
 import static org.apache.dubbo.rpc.Constants.LOCAL_PROTOCOL;
 import static org.apache.dubbo.rpc.cluster.Constants.PEER_KEY;
 import static org.apache.dubbo.rpc.cluster.Constants.REFER_KEY;
@@ -246,50 +247,81 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
     }
 
     protected synchronized void init() {
-        if (initialized) {
+        if (initialized && ref !=null ) {
             return;
         }
-        initialized = true;
+        try {
+            if (!this.isRefreshed()) {
+                this.refresh();
+            }
 
-        if (!this.isRefreshed()) {
-            this.refresh();
+            // init serviceMetadata
+            initServiceMetadata(consumer);
+
+            serviceMetadata.setServiceType(getServiceInterfaceClass());
+            // TODO, uncomment this line once service key is unified
+            serviceMetadata.generateServiceKey();
+
+            Map<String, String> referenceParameters = appendConfig();
+            // init service-application mapping
+            initServiceAppsMapping(referenceParameters);
+
+            ModuleServiceRepository repository = getScopeModel().getServiceRepository();
+            ServiceDescriptor serviceDescriptor;
+            if (CommonConstants.NATIVE_STUB.equals(getProxy())) {
+                serviceDescriptor = StubSuppliers.getServiceDescriptor(interfaceName);
+                repository.registerService(serviceDescriptor);
+            } else {
+                serviceDescriptor = repository.registerService(interfaceClass);
+            }
+            consumerModel = new ConsumerModel(serviceMetadata.getServiceKey(), proxy, serviceDescriptor,
+                getScopeModel(), serviceMetadata, createAsyncMethodInfo(), interfaceClassLoader);
+
+            // Compatible with dependencies on ServiceModel#getReferenceConfig() , and will be removed in a future version.
+            consumerModel.setConfig(this);
+
+            repository.registerConsumer(consumerModel);
+
+            serviceMetadata.getAttachments().putAll(referenceParameters);
+
+            ref = createProxy(referenceParameters);
+
+            serviceMetadata.setTarget(ref);
+            serviceMetadata.addAttribute(PROXY_CLASS_REF, ref);
+
+            consumerModel.setDestroyRunner(getDestroyRunner());
+            consumerModel.setProxyObject(ref);
+            consumerModel.initMethodModels();
+
+            checkInvokerAvailable();
+        } catch (Throwable t) {
+            try {
+                if (invoker != null) {
+                    invoker.destroy();
+                }
+            } catch (Throwable destroy) {
+                logger.warn("Unexpected error occurred when destroy invoker of ReferenceConfig(" + url + ").", destroy);
+            }
+            if (consumerModel != null) {
+                ModuleServiceRepository repository = getScopeModel().getServiceRepository();
+                repository.unregisterConsumer(consumerModel);
+            }
+            initialized = false;
+            invoker = null;
+            ref = null;
+            consumerModel = null;
+            serviceMetadata.setTarget(null);
+            serviceMetadata.getAttributeMap().remove(PROXY_CLASS_REF);
+
+            throw t;
         }
-
-        // init serviceMetadata
-        initServiceMetadata(consumer);
-
-        serviceMetadata.setServiceType(getServiceInterfaceClass());
-        // TODO, uncomment this line once service key is unified
-        serviceMetadata.setServiceKey(URL.buildKey(interfaceName, group, version));
-
-        Map<String, String> referenceParameters = appendConfig();
-        // init service-application mapping
-        initServiceAppsMapping(referenceParameters);
-
-        ModuleServiceRepository repository = getScopeModel().getServiceRepository();
-        ServiceDescriptor serviceDescriptor = repository.registerService(interfaceClass);
-        consumerModel = new ConsumerModel(serviceMetadata.getServiceKey(), proxy, serviceDescriptor, this,
-            getScopeModel(), serviceMetadata, createAsyncMethodInfo());
-
-        repository.registerConsumer(consumerModel);
-
-        serviceMetadata.getAttachments().putAll(referenceParameters);
-
-        ref = createProxy(referenceParameters);
-
-        serviceMetadata.setTarget(ref);
-        serviceMetadata.addAttribute(PROXY_CLASS_REF, ref);
-
-        consumerModel.setProxyObject(ref);
-        consumerModel.initMethodModels();
-
-        checkInvokerAvailable();
+        initialized = true;
     }
 
     private void initServiceAppsMapping(Map<String, String> referenceParameters) {
         ServiceNameMapping serviceNameMapping = ServiceNameMapping.getDefaultExtension(getScopeModel());
         URL url = new ServiceConfigURL(LOCAL_PROTOCOL, LOCALHOST_VALUE, 0, interfaceName, referenceParameters);
-        serviceNameMapping.getServices(url);
+        serviceNameMapping.initInterfaceAppMapping(url);
     }
 
     /**
@@ -346,11 +378,6 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
         AbstractConfig.appendParameters(map, this);
         appendMetricsCompatible(map);
 
-        MetadataReportConfig metadataReportConfig = getMetadataReportConfig();
-        if (metadataReportConfig != null && metadataReportConfig.isValid()) {
-            map.putIfAbsent(METADATA_KEY, REMOTE_METADATA_STORAGE_TYPE);
-        }
-
         String hostToRegistry = ConfigUtils.getSystemProperty(DUBBO_IP_TO_REGISTRY);
         if (StringUtils.isEmpty(hostToRegistry)) {
             hostToRegistry = NetUtils.getLocalHost();
@@ -396,14 +423,16 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
         }
 
         if (logger.isInfoEnabled()) {
-            logger.info("Referred dubbo service " + interfaceClass.getName());
+            logger.info("Referred dubbo service: [" + referenceParameters.get(INTERFACE_KEY) + "]." +
+                (Boolean.parseBoolean(referenceParameters.get(GENERIC_KEY)) ?
+                    " it's GenericService reference" : " it's not GenericService reference"));
         }
 
         URL consumerUrl = new ServiceConfigURL(CONSUMER_PROTOCOL, referenceParameters.get(REGISTER_IP_KEY), 0,
             referenceParameters.get(INTERFACE_KEY), referenceParameters);
         consumerUrl = consumerUrl.setScopeModel(getScopeModel());
         consumerUrl = consumerUrl.setServiceModel(consumerModel);
-        MetadataUtils.publishServiceDefinition(interfaceName, consumerUrl, getScopeModel(), getApplicationModel());
+        MetadataUtils.publishServiceDefinition(consumerUrl, consumerModel.getServiceModel(), getApplicationModel());
 
         // create service proxy
         return (T) proxyFactory.getProxy(invoker, ProtocolUtils.isGeneric(generic));
@@ -488,7 +517,7 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
         if (urls.size() == 1) {
             URL curUrl = urls.get(0);
             invoker = protocolSPI.refer(interfaceClass, curUrl);
-            if (!UrlUtils.isRegistry(curUrl)){
+            if (!UrlUtils.isRegistry(curUrl)) {
                 List<Invoker<?>> invokers = new ArrayList<>();
                 invokers.add(invoker);
                 invoker = Cluster.getCluster(scopeModel, Cluster.DEFAULT).join(new StaticDirectory(curUrl, invokers), true);
@@ -528,17 +557,16 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
 
     private void checkInvokerAvailable() throws IllegalStateException {
         if (shouldCheck() && !invoker.isAvailable()) {
-            invoker.destroy();
-            throw new IllegalStateException("Failed to check the status of the service "
-                + interfaceName
-                + ". No provider available for the service "
-                + (group == null ? "" : group + "/")
-                + interfaceName +
-                (version == null ? "" : ":" + version)
-                + " from the url "
-                + invoker.getUrl()
-                + " to the consumer "
-                + NetUtils.getLocalHost() + " use dubbo version " + Version.getVersion());
+                throw new IllegalStateException("Failed to check the status of the service "
+                    + interfaceName
+                    + ". No provider available for the service "
+                    + (group == null ? "" : group + "/")
+                    + interfaceName +
+                    (version == null ? "" : ":" + version)
+                    + " from the url "
+                    + invoker.getUrl()
+                    + " to the consumer "
+                    + NetUtils.getLocalHost() + " use dubbo version " + Version.getVersion());
         }
     }
 
@@ -563,12 +591,18 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
             setGeneric(getConsumer().getGeneric());
         }
         if (ProtocolUtils.isGeneric(generic)) {
+            if (interfaceClass != null && !interfaceClass.equals(GenericService.class)) {
+                logger.warn(String.format("Found conflicting attributes for interface type: [interfaceClass=%s] and [generic=%s], " +
+                        "because the 'generic' attribute has higher priority than 'interfaceClass', so change 'interfaceClass' to '%s'. " +
+                        "Note: it will make this reference bean as a candidate bean of type '%s' instead of '%s' when resolving dependency in Spring.",
+                    interfaceClass.getName(), generic, GenericService.class.getName(), GenericService.class.getName(), interfaceClass.getName()));
+            }
             interfaceClass = GenericService.class;
         } else {
             try {
-                if (getInterfaceClassLoader() != null) {
+                if (getInterfaceClassLoader() != null && (interfaceClass == null || interfaceClass.getClassLoader() != getInterfaceClassLoader())) {
                     interfaceClass = Class.forName(interfaceName, true, getInterfaceClassLoader());
-                } else {
+                } else if (interfaceClass == null) {
                     interfaceClass = Class.forName(interfaceName, true, Thread.currentThread()
                         .getContextClassLoader());
                 }
@@ -609,7 +643,6 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
      * call, which is the default behavior
      */
     protected boolean shouldJvmRefer(Map<String, String> map) {
-        URL tmpUrl = new ServiceConfigURL("temp", "localhost", 0, map);
         boolean isJvmRefer;
         if (isInjvm() == null) {
             // if an url is specified, don't do local reference
@@ -617,6 +650,7 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
                 isJvmRefer = false;
             } else {
                 // by default, reference local service if there is
+                URL tmpUrl = new ServiceConfigURL("temp", "localhost", 0, map);
                 isJvmRefer = InjvmProtocol.getInjvmProtocol(getScopeModel()).isInjvmRefer(tmpUrl);
             }
         } else {
@@ -639,5 +673,9 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
     @Deprecated
     public Invoker<?> getInvoker() {
         return invoker;
+    }
+
+    public Runnable getDestroyRunner() {
+        return this::destroy;
     }
 }

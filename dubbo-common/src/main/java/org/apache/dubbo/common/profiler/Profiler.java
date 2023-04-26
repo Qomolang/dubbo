@@ -23,6 +23,7 @@ import java.util.List;
 
 public class Profiler {
     public static final String PROFILER_KEY = "DUBBO_INVOKE_PROFILER";
+    public static final int MAX_ENTRY_SIZE = 1000;
 
     private final static InternalThreadLocal<ProfilerEntry> bizProfiler = new InternalThreadLocal<>();
 
@@ -32,7 +33,9 @@ public class Profiler {
 
     public static ProfilerEntry enter(ProfilerEntry entry, String message) {
         ProfilerEntry subEntry = new ProfilerEntry(message, entry, entry.getFirst());
-        entry.getSub().add(subEntry);
+        if (subEntry.getRequestCount().incrementAndGet() < MAX_ENTRY_SIZE) {
+            entry.getSub().add(subEntry);
+        } // ignore if sub entry size is exceed
         return subEntry;
     }
 
@@ -46,8 +49,12 @@ public class Profiler {
         }
     }
 
-    public static void setToBizProfiler(ProfilerEntry entry) {
-        bizProfiler.set(entry);
+    public static ProfilerEntry setToBizProfiler(ProfilerEntry entry) {
+        try {
+            return bizProfiler.get();
+        } finally {
+            bizProfiler.set(entry);
+        }
     }
 
     public static ProfilerEntry getBizProfiler() {
@@ -59,10 +66,9 @@ public class Profiler {
     }
 
     public static String buildDetail(ProfilerEntry entry) {
-        ProfilerEntry firstEntry = entry.getFirst();
-        long totalUsageTime = firstEntry.getEndTime() - firstEntry.getStartTime();
-        return "Start time: " + firstEntry.getStartTime() + "\n" +
-            String.join("\n", buildDetail(firstEntry, firstEntry.getStartTime(), totalUsageTime, 0));
+        long totalUsageTime = entry.getEndTime() - entry.getStartTime();
+        return "Start time: " + entry.getStartTime() + "\n" +
+            String.join("\n", buildDetail(entry, entry.getStartTime(), totalUsageTime, 0));
     }
 
     public static List<String> buildDetail(ProfilerEntry entry, long startTime, long totalUsageTime, int depth) {
@@ -73,9 +79,9 @@ public class Profiler {
         long offset = entry.getStartTime() - startTime;
         List<String> lines = new LinkedList<>();
         stringBuilder.append("+-[ Offset: ")
-            .append(offset / 1000_000).append(".").append(String.format("%06d", offset % 1000_000))
+            .append(offset / 1000_000).append('.').append(String.format("%06d", offset % 1000_000))
             .append("ms; Usage: ")
-            .append(usage / 1000_000).append(".").append(String.format("%06d", usage % 1000_000))
+            .append(usage / 1000_000).append('.').append(String.format("%06d", usage % 1000_000))
             .append("ms, ")
             .append(percent)
             .append("% ] ")

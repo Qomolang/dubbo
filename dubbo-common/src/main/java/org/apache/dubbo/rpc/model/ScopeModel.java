@@ -72,11 +72,12 @@ public abstract class ScopeModel implements ExtensionAccessor {
 
     private Map<String, Object> attributes;
     private final AtomicBoolean destroyed = new AtomicBoolean(false);
-    protected boolean internalModule;
+    private final boolean internalScope;
 
-    public ScopeModel(ScopeModel parent, ExtensionScope scope) {
+    public ScopeModel(ScopeModel parent, ExtensionScope scope, boolean isInternal) {
         this.parent = parent;
         this.scope = scope;
+        this.internalScope = isInternal;
     }
 
     /**
@@ -130,6 +131,14 @@ public abstract class ScopeModel implements ExtensionAccessor {
     protected void notifyDestroy() {
         for (ScopeModelDestroyListener destroyListener : destroyListeners) {
             destroyListener.onDestroy(this);
+        }
+    }
+
+    protected void notifyProtocolDestroy() {
+        for (ScopeModelDestroyListener destroyListener : destroyListeners) {
+            if (destroyListener.isProtocol()) {
+                destroyListener.onDestroy(this);
+            }
         }
     }
 
@@ -229,11 +238,11 @@ public abstract class ScopeModel implements ExtensionAccessor {
     }
 
     public boolean isInternal() {
-        return internalModule;
+        return internalScope;
     }
 
     /**
-     * @return the describe string of this scope model
+     * @return to describe string of this scope model
      */
     public String getDesc() {
         if (this.desc == null) {

@@ -87,6 +87,13 @@ public abstract class AbstractRegistryFactory implements RegistryFactory, ScopeM
             }
             //create registry by spi/ioc
             registry = createRegistry(url);
+            if (check && registry == null) {
+                throw new IllegalStateException("Can not create registry " + url);
+            }
+
+            if (registry != null) {
+                registryManager.putRegistry(key, registry);
+            }
         } catch (Exception e) {
             if (check) {
                 throw new RuntimeException("Can not create registry " + url, e);
@@ -98,19 +105,12 @@ public abstract class AbstractRegistryFactory implements RegistryFactory, ScopeM
             registryManager.getRegistryLock().unlock();
         }
 
-        if (check && registry == null) {
-            throw new IllegalStateException("Can not create registry " + url);
-        }
-
-        if (registry != null) {
-            registryManager.putRegistry(key, registry);
-        }
         return registry;
     }
 
     /**
      * Create the key for the registries cache.
-     * This method may be override by the sub-class.
+     * This method may be overridden by the sub-class.
      *
      * @param url the registration {@link URL url}
      * @return non-null

@@ -119,7 +119,7 @@ public abstract class AbstractInvoker<T> implements Invoker<T> {
         if (ArrayUtils.isEmpty(keys)) {
             return null;
         }
-        Map<String, Object> attachment = new HashMap<>();
+        Map<String, Object> attachment = new HashMap<>(keys.length);
         for (String key : keys) {
             String value = url.getParameter(key);
             if (value != null && value.length() > 0) {
@@ -259,13 +259,14 @@ public abstract class AbstractInvoker<T> implements Invoker<T> {
              * must call {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} because
              * {@link java.util.concurrent.CompletableFuture#get()} was proved to have serious performance drop.
              */
-            Object timeout = invocation.getObjectAttachment(TIMEOUT_KEY);
+            Object timeout = invocation.getObjectAttachmentWithoutConvert(TIMEOUT_KEY);
             if (timeout instanceof Integer) {
                 asyncResult.get((Integer) timeout, TimeUnit.MILLISECONDS);
             } else {
                 asyncResult.get(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);
             }
         } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new RpcException("Interrupted unexpectedly while waiting for remote result to return! method: " +
                 invocation.getMethodName() + ", provider: " + getUrl() + ", cause: " + e.getMessage(), e);
         } catch (ExecutionException e) {
@@ -291,14 +292,12 @@ public abstract class AbstractInvoker<T> implements Invoker<T> {
     // -- Protected api
 
     protected ExecutorService getCallbackExecutor(URL url, Invocation inv) {
-        ExecutorService sharedExecutor = url.getOrDefaultApplicationModel().getExtensionLoader(ExecutorRepository.class)
+        if (InvokeMode.SYNC == RpcUtils.getInvokeMode(getUrl(), inv)) {
+            return new ThreadlessExecutor();
+        }
+        return url.getOrDefaultApplicationModel().getExtensionLoader(ExecutorRepository.class)
             .getDefaultExtension()
             .getExecutor(url);
-        if (InvokeMode.SYNC == RpcUtils.getInvokeMode(getUrl(), inv)) {
-            return new ThreadlessExecutor(sharedExecutor);
-        } else {
-            return sharedExecutor;
-        }
     }
 
     /**

@@ -22,6 +22,7 @@ import org.apache.dubbo.config.spring.extension.SpringExtensionInjector;
 import org.apache.dubbo.config.spring.util.DubboBeanUtils;
 import org.apache.dubbo.config.spring.util.EnvironmentUtils;
 import org.apache.dubbo.rpc.model.ApplicationModel;
+import org.apache.dubbo.rpc.model.ModuleModel;
 
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -60,7 +61,7 @@ public class DubboInfraBeanRegisterPostProcessor implements BeanDefinitionRegist
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
 
-        // In Spring 3.2.x, registry may be null because do not calling postProcessBeanDefinitionRegistry method before postProcessBeanFactory
+        // In Spring 3.2.x, registry may be null because do not call postProcessBeanDefinitionRegistry method before postProcessBeanFactory
         if (registry != null) {
             // register ReferenceAnnotationBeanPostProcessor early before PropertySourcesPlaceholderConfigurer/PropertyPlaceholderConfigurer
             // for processing early init ReferenceBean
@@ -73,9 +74,11 @@ public class DubboInfraBeanRegisterPostProcessor implements BeanDefinitionRegist
         }
 
         ApplicationModel applicationModel = DubboBeanUtils.getApplicationModel(beanFactory);
+        ModuleModel moduleModel = DubboBeanUtils.getModuleModel(beanFactory);
 
         // Initialize SpringExtensionInjector
         SpringExtensionInjector.get(applicationModel).init(applicationContext);
+        SpringExtensionInjector.get(moduleModel).init(applicationContext);
         DubboBeanUtils.getInitializationContext(beanFactory).setApplicationContext(applicationContext);
 
         // Initialize dubbo Environment before ConfigManager

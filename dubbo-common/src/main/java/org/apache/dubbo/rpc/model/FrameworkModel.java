@@ -47,7 +47,7 @@ public class FrameworkModel extends ScopeModel {
     // internal app index is 0, default app index is 1
     private final AtomicLong appIndex = new AtomicLong(0);
 
-    private static Object globalLock = new Object();
+    private static final Object globalLock = new Object();
     
     private volatile static FrameworkModel defaultInstance;
 
@@ -63,10 +63,10 @@ public class FrameworkModel extends ScopeModel {
 
     private ApplicationModel internalApplicationModel;
 
-    private Object instLock = new Object();
+    private final Object instLock = new Object();
 
     public FrameworkModel() {
-        super(null, ExtensionScope.FRAMEWORK);
+        super(null, ExtensionScope.FRAMEWORK, false);
         this.setInternalId(String.valueOf(index.getAndIncrement()));
         // register FrameworkModel instance early
         synchronized (globalLock) {
@@ -123,7 +123,6 @@ public class FrameworkModel extends ScopeModel {
         // notify destroy and clean framework resources
         // see org.apache.dubbo.config.deploy.FrameworkModelCleaner
         notifyDestroy();
-        checkApplicationDestroy();
 
         if (LOGGER.isInfoEnabled()) {
             LOGGER.info(getDesc() + " is destroyed");
@@ -142,7 +141,7 @@ public class FrameworkModel extends ScopeModel {
     private void checkApplicationDestroy() {
         if (applicationModels.size() > 0) {
             List<String> remainApplications = applicationModels.stream()
-                .map(model -> model.getDesc())
+                .map(ScopeModel::getDesc)
                 .collect(Collectors.toList());
             throw new IllegalStateException("Not all application models are completely destroyed, remaining " +
                 remainApplications.size() + " application models may be created during destruction: " + remainApplications);
@@ -251,6 +250,19 @@ public class FrameworkModel extends ScopeModel {
         }
     }
 
+    /**
+     * Protocols are special resources that need to be destroyed as soon as possible.
+     *
+     * Since connections inside protocol are not classified by applications, trying to destroy protocols in advance might only work for singleton application scenario.
+     */
+    void tryDestroyProtocols() {
+        synchronized (instLock) {
+            if (pubApplicationModels.size() == 0) {
+                notifyProtocolDestroy();
+            }
+        }
+    }
+
     void tryDestroy() {
         synchronized (instLock) {
             if (pubApplicationModels.size() == 0) {
@@ -307,10 +319,16 @@ public class FrameworkModel extends ScopeModel {
         return scopeModel != null ? scopeModel.getDesc() : null;
     }
 
+    /**
+     * Get all application models except for the internal application model.
+     */
     public List<ApplicationModel> getApplicationModels() {
         return Collections.unmodifiableList(pubApplicationModels);
     }
 
+    /**
+     * Get all application models including the internal application model.
+     */
     public List<ApplicationModel> getAllApplicationModels() {
         return Collections.unmodifiableList(applicationModels);
     }

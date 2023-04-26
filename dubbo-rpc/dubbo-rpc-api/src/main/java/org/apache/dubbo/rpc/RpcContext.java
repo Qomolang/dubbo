@@ -107,6 +107,8 @@ public class RpcContext {
         CANCELLATION_CONTEXT.set(oldContext);
     }
 
+    private boolean remove = true;
+
     protected RpcContext() {
     }
 
@@ -156,6 +158,14 @@ public class RpcContext {
         return SERVER_ATTACHMENT.get();
     }
 
+    public boolean canRemove() {
+        return remove;
+    }
+
+    public void clearAfterEachInvoke(boolean remove) {
+        this.remove = remove;
+    }
+
     /**
      * Using to pass environment parameters in the whole invocation. For example, `remotingApplicationName`,
      * `remoteAddress`, etc. {@link RpcServiceContext}
@@ -166,24 +176,36 @@ public class RpcContext {
         return SERVICE_CONTEXT.get();
     }
 
+    public static RpcServiceContext getCurrentServiceContext() {
+        return SERVICE_CONTEXT.getWithoutInitialize();
+    }
+
     public static void removeServiceContext() {
         SERVICE_CONTEXT.remove();
     }
 
     public static void removeClientAttachment() {
-        CLIENT_ATTACHMENT.remove();
+        if (CLIENT_ATTACHMENT.get().canRemove()) {
+            CLIENT_ATTACHMENT.remove();
+        }
     }
 
     public static void removeServerAttachment() {
-        SERVER_ATTACHMENT.remove();
+        if (SERVER_ATTACHMENT.get().canRemove()) {
+            SERVER_ATTACHMENT.remove();
+        }
     }
 
     /**
      * customized for internal use.
      */
     public static void removeContext() {
-        CLIENT_ATTACHMENT.remove();
-        SERVER_ATTACHMENT.remove();
+        if (CLIENT_ATTACHMENT.get().canRemove()) {
+            CLIENT_ATTACHMENT.remove();
+        }
+        if (SERVER_ATTACHMENT.get().canRemove()) {
+            SERVER_ATTACHMENT.remove();
+        }
         SERVER_LOCAL.remove();
         SERVICE_CONTEXT.remove();
         CANCELLATION_CONTEXT.remove();
@@ -768,8 +790,9 @@ public class RpcContext {
         SERVICE_CONTEXT.get().setConsumerUrl(consumerUrl);
     }
 
+    @Deprecated
     public static void setRpcContext(URL url) {
-        RpcServiceContext.setRpcContext(url);
+        RpcServiceContext.getServiceContext().setConsumerUrl(url);
     }
 
     protected static RestoreContext clearAndStoreContext() {
@@ -780,6 +803,16 @@ public class RpcContext {
 
     protected static RestoreContext storeContext() {
         return new RestoreContext();
+    }
+
+    public static RestoreServiceContext storeServiceContext() {
+        return new RestoreServiceContext();
+    }
+
+    public static void restoreServiceContext(RestoreServiceContext restoreServiceContext) {
+        if (restoreServiceContext != null) {
+            restoreServiceContext.restore();
+        }
     }
 
     protected static void restoreContext(RestoreContext restoreContext) {
@@ -824,6 +857,27 @@ public class RpcContext {
                 SERVER_LOCAL.set(serverLocal);
             } else {
                 removeServerContext();
+            }
+        }
+    }
+
+    public static class RestoreServiceContext {
+        private final RpcServiceContext serviceContext;
+
+        public RestoreServiceContext() {
+            RpcServiceContext originContext = getCurrentServiceContext();
+            if (originContext == null) {
+                this.serviceContext = null;
+            } else {
+                this.serviceContext = originContext.copyOf(true);
+            }
+        }
+
+        protected void restore() {
+            if (serviceContext != null) {
+                SERVICE_CONTEXT.set(serviceContext);
+            } else {
+                removeServiceContext();
             }
         }
     }

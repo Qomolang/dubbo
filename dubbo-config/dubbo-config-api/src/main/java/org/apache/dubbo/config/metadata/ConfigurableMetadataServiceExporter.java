@@ -22,6 +22,8 @@ import org.apache.dubbo.common.logger.LoggerFactory;
 import org.apache.dubbo.common.utils.CollectionUtils;
 import org.apache.dubbo.common.utils.StringUtils;
 import org.apache.dubbo.config.ApplicationConfig;
+import org.apache.dubbo.config.ArgumentConfig;
+import org.apache.dubbo.config.MethodConfig;
 import org.apache.dubbo.config.ProtocolConfig;
 import org.apache.dubbo.config.RegistryConfig;
 import org.apache.dubbo.config.ServiceConfig;
@@ -30,14 +32,20 @@ import org.apache.dubbo.rpc.Protocol;
 import org.apache.dubbo.rpc.ProtocolServer;
 import org.apache.dubbo.rpc.model.ApplicationModel;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
 import static java.util.Collections.emptyList;
+import static org.apache.dubbo.common.constants.CommonConstants.CORE_THREADS_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.DUBBO_PROTOCOL;
 import static org.apache.dubbo.common.constants.CommonConstants.METADATA_SERVICE_PORT_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.METADATA_SERVICE_PROTOCOL_KEY;
+import static org.apache.dubbo.common.constants.CommonConstants.THREADPOOL_KEY;
+import static org.apache.dubbo.common.constants.CommonConstants.THREADS_KEY;
+import static org.apache.dubbo.remoting.Constants.BIND_PORT_KEY;
 
 /**
  * Export metadata service
@@ -90,6 +98,10 @@ public class ConfigurableMetadataServiceExporter {
         return applicationModel.getApplicationConfigManager().getApplication().get();
     }
 
+    private ProtocolConfig getProtocolConfig(String protocol) {
+        return applicationModel.getApplicationConfigManager().getProtocol(protocol).get();
+    }
+
     private ProtocolConfig generateMetadataProtocol() {
         // protocol always defaults to dubbo if not specified
         String specifiedProtocol = getSpecifiedProtocol();
@@ -108,10 +120,21 @@ public class ConfigurableMetadataServiceExporter {
                 Protocol protocol = applicationModel.getExtensionLoader(Protocol.class).getExtension(specifiedProtocol);
                 if (protocol != null && protocol.getServers() != null) {
                     Iterator<ProtocolServer> it = protocol.getServers().iterator();
+                    // metadata service may export before normal service export, it.hasNext() will return false.
+                    // so need use specified protocol port.
                     if (it.hasNext()) {
-                        String addr = it.next().getAddress();
-                        String rawPort = addr.substring(addr.indexOf(":") + 1);
+                        ProtocolServer server = it.next();
+                        String rawPort = server.getUrl().getParameter(BIND_PORT_KEY);
+                        if (rawPort == null) {
+                            String addr = server.getAddress();
+                            rawPort = addr.substring(addr.indexOf(":") + 1);
+                        }
                         protocolConfig.setPort(Integer.parseInt(rawPort));
+                    } else {
+                        Integer protocolPort = getProtocolConfig(specifiedProtocol).getPort();
+                        if (null != protocolPort && protocolPort != -1) {
+                            protocolConfig.setPort(protocolPort);
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -162,18 +185,48 @@ public class ConfigurableMetadataServiceExporter {
         ServiceConfig<MetadataService> serviceConfig = new ServiceConfig<>();
         serviceConfig.setScopeModel(applicationModel.getInternalModule());
         serviceConfig.setApplication(applicationConfig);
-        serviceConfig.setRegistry(new RegistryConfig("N/A"));
+        RegistryConfig registryConfig = new RegistryConfig("N/A");
+        registryConfig.setId("internal-metadata-registry");
+        serviceConfig.setRegistry(registryConfig);
+        serviceConfig.setRegister(false);
         serviceConfig.setProtocol(generateMetadataProtocol());
         serviceConfig.setInterface(MetadataService.class);
         serviceConfig.setDelay(0);
         serviceConfig.setRef(metadataService);
         serviceConfig.setGroup(applicationConfig.getName());
         serviceConfig.setVersion(MetadataService.VERSION);
-//            serviceConfig.setMethods(generateMethodConfig());
+        serviceConfig.setMethods(generateMethodConfig());
         serviceConfig.setConnections(1); // separate connection
         serviceConfig.setExecutes(100); // max tasks running at the same time
+        Map<String, String> threadParams = new HashMap<>();
+        threadParams.put(THREADPOOL_KEY, "cached");
+        threadParams.put(THREADS_KEY, "100");
+        threadParams.put(CORE_THREADS_KEY, "2");
+        serviceConfig.setParameters(threadParams);
 
         return serviceConfig;
+    }
+
+    /**
+     * Generate Method Config for Service Discovery Metadata <p/>
+     * <p>
+     * Make {@link MetadataService} support argument callback,
+     * used to notify {@link org.apache.dubbo.registry.client.ServiceInstance}'s
+     * metadata change event
+     *
+     * @since 3.0
+     */
+    private List<MethodConfig> generateMethodConfig() {
+        MethodConfig methodConfig = new MethodConfig();
+        methodConfig.setName("getAndListenInstanceMetadata");
+
+        ArgumentConfig argumentConfig = new ArgumentConfig();
+        argumentConfig.setIndex(1);
+        argumentConfig.setCallback(true);
+
+        methodConfig.setArguments(Collections.singletonList(argumentConfig));
+
+        return Collections.singletonList(methodConfig);
     }
 
     // for unit test
